@@ -30,6 +30,16 @@ const UNIVERSE = [
   'DOGEUSDT',
   'SUIUSDT',
   'ONDOUSDT',
+  'ADAUSDT',
+  'TAOUSDT',
+];
+
+const WATCHLIST_COINS = ['ONDOUSDT', 'ADAUSDT', 'TAOUSDT', 'SUIUSDT', 'SOLUSDT'];
+
+const BTC_BUY_ZONES = [
+  { id: 'Z1_55200', triggerPrice: 55200, allocPct: 3, label: 'Lớp 1 (Thăm dò 3% danh mục · Vùng đáy 365D $53.5K–$55.2K)' },
+  { id: 'Z2_48500', triggerPrice: 48500, allocPct: 4, label: 'Lớp 2 (Giá trị cốt lõi 4% danh mục · Vùng $46K–$48.5K)' },
+  { id: 'Z3_41000', triggerPrice: 41000, allocPct: 3, label: 'Lớp 3 (Bắt hoảng loạn Black Swan 3% danh mục · Vùng $38K–$41K)' },
 ];
 
 async function fetchRecentKlines4h(symbol, limit = 400) {
@@ -153,6 +163,7 @@ function loadState() {
     regime: 'UNKNOWN',
     riskBudget: 0,
     positions: {}, // sym -> { weight, entryPrice, peakClose, updatedTs }
+    btcBuyZonesHit: {}, // zoneId -> isoTimestamp
     lastDailyReportDate: '',
   };
 }
@@ -319,6 +330,22 @@ async function main() {
   const regimeChanged = state.regime !== regime;
   state.regime = regime;
   state.riskBudget = riskBudget;
+  if (!state.btcBuyZonesHit) state.btcBuyZonesHit = {};
+
+  // Check BTC Scale-In Limit Zones (alerts once when BTC dips into each target zone)
+  for (const z of BTC_BUY_ZONES) {
+    if (btc.close <= z.triggerPrice && !state.btcBuyZonesHit[z.id]) {
+      actions.push(
+        `🎯 <b>CHẠM MỐC GOM BTC DẦN (${z.allocPct}% vốn)</b>\n` +
+        `   • BTC hiện tại: <b>${fmtPrice(btc.close)}</b> (≤ mốc ${fmtPrice(z.triggerPrice)})\n` +
+        `   • Kế hoạch: ${z.label}`
+      );
+      state.btcBuyZonesHit[z.id] = new Date().toISOString();
+    } else if (btc.close > z.triggerPrice * 1.12 && state.btcBuyZonesHit[z.id]) {
+      // Reset zone only after BTC rebounds >12% above it
+      delete state.btcBuyZonesHit[z.id];
+    }
+  }
 
   // Print Live Console Summary
   console.log(`  Regime : ${regime} (Deploy ${(riskBudget * 100).toFixed(0)}% | Cash USDT ${((1 - riskBudget) * 100).toFixed(0)}%)`);
@@ -343,17 +370,27 @@ async function main() {
       return `  • <b>${sym.replace('USDT', '')}</b>: ${(p.weight * 100).toFixed(0)}% vốn | Giá ${fmtPrice(m.close)} (${pnl >= 0 ? '+' : ''}${pnl}%) | Trail Stop: ${fmtPrice(stop)}`;
     });
     const cashPct = Math.max(0, 100 - Object.values(state.positions).reduce((s, p) => s + p.weight * 100, 0));
+    const watchLines = WATCHLIST_COINS.map(sym => {
+      const m = snap[sym];
+      const coin = sym.replace('USDT', '').padEnd(4);
+      const trendIcon = (m.close > m.ema20d && m.ema20d > m.ema50d) ? '🟢' : (m.close > m.ema50d ? '🟡' : '🔴');
+      const r30 = (m.ret30d * 100 >= 0 ? '+' : '') + (m.ret30d * 100).toFixed(1) + '%';
+      return `  ${trendIcon} <b>${coin}</b>: ${fmtPrice(m.close)} (30D ${r30} · Taker ${(m.takerRatio5d * 100).toFixed(0)}%)`;
+    });
 
     const msg =
       `📊 <b>CRYPTO QUANT DESK v2</b> — ${ictStr}\n` +
       `🧭 Trạng thái Vĩ mô: <b>${regimeLabel}</b>\n` +
-      `₿ BTC: <b>${fmtPrice(btc.close)}</b> (EMA20D ${fmtPrice(btc.ema20d)} · EMA50D ${fmtPrice(btc.ema50d)})\n\n` +
+      `₿ BTC: <b>${fmtPrice(btc.close)}</b> (EMA20D ${fmtPrice(btc.ema20d)} · EMA50D ${fmtPrice(btc.ema50d)})\n` +
+      `🎯 Mốc gom BTC (10% vốn): $55.2K (3%) · $48.5K (4%) · $41.0K (3%)\n\n` +
       (actions.length > 0
         ? `⚡ <b>HÀNH ĐỘNG CẦN LÀM NGAY:</b>\n${actions.join('\n\n')}\n\n`
         : `✅ <b>Không có lệnh đổi vị thế</b> — Giữ nguyên kỷ luật hiện tại.\n\n`) +
       `💼 <b>Cơ cấu Danh mục Chuẩn lúc này:</b>\n` +
       (holdLines.length > 0 ? holdLines.join('\n') + '\n' : '') +
-      `  • <b>USDT (Tiền mặt phòng thủ)</b>: <b>${cashPct.toFixed(0)}% vốn</b>`;
+      `  • <b>USDT (Tiền mặt phòng thủ)</b>: <b>${cashPct.toFixed(0)}% vốn</b>\n\n` +
+      `👀 <b>Watchlist ưu tiên (ONDO, ADA, TAO, SUI, SOL):</b>\n` +
+      watchLines.join('\n');
 
     const sent = await sendTelegram(msg);
     if (sent && isMorningWindow) state.lastDailyReportDate = todayIct;
