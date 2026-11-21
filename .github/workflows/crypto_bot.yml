@@ -1,0 +1,40 @@
+name: Crypto Quant Bot v2
+
+on:
+  schedule:
+    # Run 5 minutes after every 4H UTC candle close (00:05, 04:05, 08:05, 12:05, 16:05, 20:05 UTC)
+    # Note: 00:05 UTC = 07:05 AM ICT (automatically triggers Daily Morning Briefing too!)
+    - cron: '5 */4 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-quant-bot-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22 (Zero external dependencies)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run Crypto Quant Bot v2
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node signal_bot_v2.js
+
+      - name: Persist portfolio state (state_v2.json)
+        run: |
+          if [ -f state_v2.json ]; then
+            git config user.name "crypto-quant-bot-v2"
+            git config user.email "bot@github.com"
+            git add state_v2.json
+            git diff --staged --quiet || (git commit -m "chore: update state_v2 portfolio regime" && git push)
+          fi
